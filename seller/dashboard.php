@@ -1,3 +1,14 @@
+<?php
+   session_start();
+   
+   $name = $_SESSION["user_name"];
+    if(!$name){
+        header("Location: ../login.php");
+    }
+
+?>
+
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -171,14 +182,19 @@
 
 
                 <div class="profile">
-
+                <a href="../logout.php">
                     <div class="profile-avatar">
-                        T
+                        <?php
+                            // $p_avatar = $name;
+                            echo $name[0].$name[1];
+                        ?>
+                        
                     </div>
+                    </a>
 
                     <div class="profile-info">
-                        <strong>Talha</strong>
-                        <span>Owner</span>
+                        <strong><?php echo $name ?></strong>
+                        <span><?php echo $_SESSION["role"] ?></span>
                     </div>
 
                 </div>

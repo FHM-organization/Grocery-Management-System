@@ -837,6 +837,7 @@ tbody tr:hover {
         margin-right: 12px;
     }
 
+
     .profile-info {
         display: none;
     }
@@ -851,6 +852,12 @@ tbody tr:hover {
         gap: 15px;
     }
 
+}
+
+.profile a {
+    text-decoration: none;
+    color: inherit;
+    display: block;
 }
 
 

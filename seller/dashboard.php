@@ -182,15 +182,15 @@
 
 
                 <div class="profile">
-                <a href="../logout.php">
-                    <div class="profile-avatar">
-                        <?php
-                            // $p_avatar = $name;
-                            echo $name[0].$name[1];
-                        ?>
+                    <a href="../profile.php">
+                        <div class="profile-avatar">
+                            <?php
+                                 echo $name[0].$name[1];
+                            ?>
                         
-                    </div>
+                        </div>
                     </a>
+                    
 
                     <div class="profile-info">
                         <strong><?php echo $name ?></strong>

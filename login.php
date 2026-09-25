@@ -1,4 +1,4 @@
-<?php
+<!-- <?php
 
 session_start();
 
@@ -45,7 +45,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     $_SESSION["user_id"] = $user["id"];
                     $_SESSION["shop_id"] = $user["shop_id"];
                     $_SESSION["user_name"] = $user["name"];
+                    $_SESSION["username"] = $user["username"];
                     $_SESSION["role"] = $user["role"];
+                    $_SESSION["status"] = $user["status"];
+
                     
                    header("Location: success_login.php");
                     exit;
@@ -107,7 +110,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 <p>Login to manage your grocery store</p>
             </div>
 
-            <form action="#" method="POST">
+            <form action="login.php" method="POST">
                 
                 <?php if ($form_error !== ""): ?>
                 <div class="form-error">
@@ -141,4 +144,4 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     </div>
 
 </body>
-</html>
+</html> -->

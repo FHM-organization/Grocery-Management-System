@@ -3,389 +3,848 @@
 session_start();
 
 require_once "config/database.php";
+require_once "includes/current_user.php";
 
-if (!isset($_SESSION["user_id"])) {
-    header("Location: login.php");
+header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
+header("Cache-Control: post-check=0, pre-check=0", false);
+header("Pragma: no-cache");
+header("Expires: 0");
+
+
+/*
+|--------------------------------------------------------------------------
+| Check Login
+|--------------------------------------------------------------------------
+*/
+
+if (!isset($_SESSION["user_id"], $_SESSION["shop_id"])) {
+    header("Location: index.php");
     exit;
 }
 
-$name = $_SESSION["user_name"];
-$username = $_SESSION["username"];
-$role = $_SESSION["role"];
-$status = $_SESSION["status"];
-$shop_id = $_SESSION["shop_id"];
 
+/*
+|--------------------------------------------------------------------------
+| Get Current User
+|--------------------------------------------------------------------------
+*/
+
+$user = getCurrentUser($conn);
+
+if (!$user) {
+    session_destroy();
+    header("Location: index.php");
+    exit;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Default Values
+|--------------------------------------------------------------------------
+*/
+
+$user_id = $user["id"];
+
+$name = $user["name"] ?? "";
+$username = $user["username"] ?? "";
+$phone = $user["phone"] ?? "";
+$email = $user["email"] ?? "";
+$role = $user["role"] ?? "";
+$status = $user["status"] ?? "";
+$profile_photo = $user["profile_photo"] ?? "";
+$created_at = $user["created_at"] ?? "";
+
+$initials = getUserInitials($name);
+$photo_url = getProfilePhotoUrl($profile_photo);
+
+$success_message = "";
+$error_message = "";
+
+
+/*
+|--------------------------------------------------------------------------
+| Update Profile
+|--------------------------------------------------------------------------
+*/
+
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST["update_profile"])) {
+
+    $new_name = trim($_POST["name"] ?? "");
+    $new_username = trim($_POST["username"] ?? "");
+    $new_phone = trim($_POST["phone"] ?? "");
+    $new_email = trim($_POST["email"] ?? "");
+
+    $new_photo_path = $profile_photo;
+    $uploaded_new_photo = false;
+    $new_photo_full_path = "";
+    $old_photo_full_path = "";
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Validation
+    |--------------------------------------------------------------------------
+    */
+
+    if ($new_name === "") {
+
+        $error_message = "Name is required.";
+
+    } elseif (strlen($new_name) < 3) {
+
+        $error_message = "Name must contain at least 3 characters.";
+
+    } elseif ($new_username === "") {
+
+        $error_message = "Username is required.";
+
+    } elseif (strlen($new_username) < 3) {
+
+        $error_message = "Username must contain at least 3 characters.";
+
+    } elseif ($new_email !== "" && !filter_var($new_email, FILTER_VALIDATE_EMAIL)) {
+
+        $error_message = "Please enter a valid email address.";
+
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Check Username
+    |--------------------------------------------------------------------------
+    */
+
+    if ($error_message === "") {
+
+        $sql = "SELECT id
+                FROM users
+                WHERE username = ?
+                AND shop_id = ?
+                AND id != ?
+                LIMIT 1";
+
+        $stmt = mysqli_prepare($conn, $sql);
+
+        if (!$stmt) {
+
+            $error_message = "Database error while checking username.";
+
+        } else {
+
+            mysqli_stmt_bind_param(
+                $stmt,
+                "sii",
+                $new_username,
+                $_SESSION["shop_id"],
+                $user_id
+            );
+
+            mysqli_stmt_execute($stmt);
+
+            $result = mysqli_stmt_get_result($stmt);
+
+            if ($result && mysqli_num_rows($result) > 0) {
+                $error_message = "This username is already in use.";
+            }
+        }
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Profile Photo Upload
+    |--------------------------------------------------------------------------
+    */
+
+    if (
+        $error_message === "" &&
+        isset($_FILES["profile_photo"]) &&
+        $_FILES["profile_photo"]["error"] !== UPLOAD_ERR_NO_FILE
+    ) {
+
+        if ($_FILES["profile_photo"]["error"] !== UPLOAD_ERR_OK) {
+
+            $error_message = "There was a problem uploading the profile photo.";
+
+        } else {
+
+            $file = $_FILES["profile_photo"];
+
+            /*
+            | Maximum size = 2 MB
+            */
+
+            if ($file["size"] > 2 * 1024 * 1024) {
+
+                $error_message = "Profile photo must be less than 2 MB.";
+
+            } else {
+
+                /*
+                | Check real image
+                */
+
+                $image_info = @getimagesize($file["tmp_name"]);
+
+                if ($image_info === false) {
+
+                    $error_message = "The selected file is not a valid image.";
+
+                } else {
+
+                    $allowed_types = [
+                        IMAGETYPE_JPEG => "jpg",
+                        IMAGETYPE_PNG  => "png",
+                        IMAGETYPE_WEBP => "webp"
+                    ];
+
+                    $image_type = $image_info[2];
+
+                    if (!isset($allowed_types[$image_type])) {
+
+                        $error_message = "Only JPG, PNG and WEBP images are allowed.";
+
+                    } else {
+
+                        /*
+                        | Create upload folder if it doesn't exist
+                        */
+
+                        $upload_directory = __DIR__ . "/uploads/profile_photos/";
+
+                        if (!is_dir($upload_directory)) {
+
+                            if (!mkdir($upload_directory, 0755, true)) {
+                                $error_message = "Could not create profile photo folder.";
+                            }
+                        }
+
+
+                        /*
+                        | Upload
+                        */
+
+                        if ($error_message === "") {
+
+                            $extension = $allowed_types[$image_type];
+
+                            $unique_name =
+                                "user_" .
+                                $user_id .
+                                "_" .
+                                time() .
+                                "_" .
+                                bin2hex(random_bytes(4)) .
+                                "." .
+                                $extension;
+
+                            $new_photo_full_path =
+                                $upload_directory . $unique_name;
+
+                            $new_photo_path =
+                                "uploads/profile_photos/" . $unique_name;
+
+
+                            if (move_uploaded_file(
+                                $file["tmp_name"],
+                                $new_photo_full_path
+                            )) {
+
+                                $uploaded_new_photo = true;
+
+                            } else {
+
+                                $error_message = "Could not save the profile photo.";
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Update Database
+    |--------------------------------------------------------------------------
+    */
+
+    if ($error_message === "") {
+
+        $sql = "UPDATE users
+                SET
+                    name = ?,
+                    username = ?,
+                    phone = ?,
+                    email = ?,
+                    profile_photo = ?
+                WHERE id = ?
+                AND shop_id = ?
+                LIMIT 1";
+
+        $stmt = mysqli_prepare($conn, $sql);
+
+        if (!$stmt) {
+
+            $error_message = "Database update failed.";
+
+        } else {
+
+            mysqli_stmt_bind_param(
+                $stmt,
+                "sssssii",
+                $new_name,
+                $new_username,
+                $new_phone,
+                $new_email,
+                $new_photo_path,
+                $user_id,
+                $_SESSION["shop_id"]
+            );
+
+
+            if (mysqli_stmt_execute($stmt)) {
+
+                /*
+                |--------------------------------------------------------------------------
+                | Delete Old Photo
+                |--------------------------------------------------------------------------
+                */
+
+                if ($uploaded_new_photo && !empty($profile_photo)) {
+
+                    $old_photo_full_path = __DIR__ . "/" . ltrim(
+                        $profile_photo,
+                        "/"
+                    );
+
+                    if (
+                        file_exists($old_photo_full_path) &&
+                        strpos(
+                            realpath($old_photo_full_path),
+                            realpath(__DIR__ . "/uploads/profile_photos/")
+                        ) === 0
+                    ) {
+                        @unlink($old_photo_full_path);
+                    }
+                }
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Update Session
+                |--------------------------------------------------------------------------
+                */
+
+                $_SESSION["user_name"] = $new_name;
+                $_SESSION["username"] = $new_username;
+
+
+                /*
+                |--------------------------------------------------------------------------
+                | Reload User
+                |--------------------------------------------------------------------------
+                */
+
+                $user = getCurrentUser($conn);
+
+                $name = $user["name"];
+                $username = $user["username"];
+                $phone = $user["phone"];
+                $email = $user["email"];
+                $role = $user["role"];
+                $status = $user["status"];
+                $profile_photo = $user["profile_photo"];
+                $created_at = $user["created_at"];
+
+                $initials = getUserInitials($name);
+                $photo_url = getProfilePhotoUrl($profile_photo);
+
+                $success_message = "Profile updated successfully.";
+
+            } else {
+
+                /*
+                | If database update failed, remove newly uploaded image
+                */
+
+                if (
+                    $uploaded_new_photo &&
+                    file_exists($new_photo_full_path)
+                ) {
+                    @unlink($new_photo_full_path);
+                }
+
+                $error_message = "Profile could not be updated.";
+            }
+        }
+    }
+}
 ?>
-
 
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Profile - Grocery Management System</title>
 
-    <link rel="stylesheet" href="assets/css/profile.css">
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>My Profile</title>
+
+    <link
+        rel="stylesheet"
+        href="assets/css/profile.css"
+    >
+
 </head>
+
 <body>
 
 <div class="profile-page">
 
-    <!-- Top Header -->
-    <header class="profile-header">
+    <!-- =====================================================
+         PAGE HEADER
+    ====================================================== -->
+
+    <div class="page-header">
+
         <div>
+            <p class="page-small-title">ACCOUNT</p>
+
             <h1>My Profile</h1>
-            <p>Manage your account information and security.</p>
+
+            <p class="page-description">
+                Manage your personal information and profile photo.
+            </p>
         </div>
 
-        <a href="seller/dashboard.php" class="back-btn">
-            ← Back to Dashboard
-        </a>
-    </header>
+    </div>
 
 
-    <!-- Main Content -->
-    <main class="profile-container">
+    <!-- =====================================================
+         MESSAGES
+    ====================================================== -->
 
-        <!-- Profile Overview -->
-        <section class="profile-card profile-overview">
+    <?php if ($success_message !== ""): ?>
 
-            <div class="profile-top">
-
-        <div class="avatar-wrapper">
-
-            <div class="profile-avatar">
-                <?php echo strtoupper($name[0] . $name[1]); ?>
-            </div>
-
-            <label for="profile-photo" class="camera-btn" title="Change Photo">
-                📷
-            </label>
-
-            <input
-                type="file"
-                id="profile-photo"
-                accept="image/*"
-                hidden
-            >
-
+        <div class="alert success-alert">
+            <?php echo htmlspecialchars($success_message); ?>
         </div>
 
-                <div class="profile-main-info">
-                    <h2><?php
-                    echo "<div style= 'font-weight: bold;'>";
-                     echo $name;
-                     echo "</div>"
-                    ?></h2>
-                    <p><?php echo $username ?></p>
+    <?php endif; ?>
 
-                    <span class="role-badge">
-                        <?php echo $role; ?>
-                    </span>
 
-                    <span class="status-badge">
-                        ● <?php echo $status; ?>
-                    </span>
-                </div>
+    <?php if ($error_message !== ""): ?>
 
-               <button type="button" class="edit-profile-btn" onclick="openEditModal()">
-                 Edit Profile
+        <div class="alert error-alert">
+            <?php echo htmlspecialchars($error_message); ?>
+        </div>
+
+    <?php endif; ?>
+
+
+    <!-- =====================================================
+         PROFILE CARD
+    ====================================================== -->
+
+    <div class="profile-card">
+
+        <div class="profile-cover"></div>
+
+        <div class="profile-content">
+
+            <div class="profile-photo-area">
+
+                <?php if ($photo_url !== ""): ?>
+
+                    <img
+                        src="<?php echo htmlspecialchars($photo_url); ?>"
+                        class="profile-photo"
+                        id="mainProfilePhoto"
+                        alt="Profile Photo"
+                    >
+
+                <?php else: ?>
+
+                    <div
+                        class="profile-initials"
+                        id="mainProfileInitials"
+                    >
+                        <?php echo htmlspecialchars($initials); ?>
+                    </div>
+
+                <?php endif; ?>
+
+
+                <button
+                    type="button"
+                    class="camera-button"
+                    id="cameraButton"
+                    title="Change Profile Photo"
+                >
+                    📷
                 </button>
 
             </div>
 
-        </section>
 
+            <div class="profile-main-info">
 
-        <!-- Profile Information -->
-        <section class="profile-card">
+                <h2 id="displayName">
+                    <?php echo htmlspecialchars($name); ?>
+                </h2>
 
-            <div class="section-heading">
-                <div>
-                    <h2>Personal Information</h2>
-                    <p>Your basic account information</p>
-                </div>
-            </div>
+                <p>
+                    @<?php echo htmlspecialchars($username); ?>
+                </p>
 
-            <div class="info-grid">
-
-                <div class="info-group">
-                    <label>Full Name</label>
-                    <div class="info-value">
-                        Talha Khan
-                    </div>
-                </div>
-
-                <div class="info-group">
-                    <label>Username</label>
-                    <div class="info-value">
-                        talha
-                    </div>
-                </div>
-
-                <div class="info-group">
-                    <label>Role</label>
-                    <div class="info-value">
-                        Seller
-                    </div>
-                </div>
-
-                <div class="info-group">
-                    <label>Account Status</label>
-                    <div class="info-value active-text">
-                        Active
-                    </div>
-                </div>
-
-                <div class="info-group">
-                    <label>Shop ID</label>
-                    <div class="info-value">
-                        #SHOP-001
-                    </div>
-                </div>
-
-                <div class="info-group">
-                    <label>Member Since</label>
-                    <div class="info-value">
-                        September 2026
-                    </div>
-                </div>
+                <span class="role-badge">
+                    <?php echo htmlspecialchars(ucfirst($role)); ?>
+                </span>
 
             </div>
 
-        </section>
 
+            <div class="profile-actions">
 
-        <!-- Edit Profile -->
-        <section class="profile-card">
-
-            <div class="section-heading">
-                <div>
-                    <h2>Edit Profile</h2>
-                    <p>Update your personal information</p>
-                </div>
-            </div>
-
-            <form>
-
-                <div class="form-grid">
-
-                    <div class="form-group">
-                        <label for="name">Full Name</label>
-                        <input
-                            type="text"
-                            id="name"
-                            value="Talha Khan"
-                            placeholder="Enter your full name"
-                        >
-                    </div>
-
-                    <div class="form-group">
-                        <label for="username">Username</label>
-                        <input
-                            type="text"
-                            id="username"
-                            value="talha"
-                            placeholder="Enter username"
-                        >
-                    </div>
-
-                    <div class="form-group">
-                        <label for="phone">Phone Number</label>
-                        <input
-                            type="tel"
-                            id="phone"
-                            placeholder="03XX-XXXXXXX"
-                        >
-                    </div>
-
-                    <div class="form-group">
-                        <label for="email">Email Address</label>
-                        <input
-                            type="email"
-                            id="email"
-                            placeholder="example@email.com"
-                        >
-                    </div>
-
-                </div>
-
-                <div class="form-actions">
-                    <button type="button" class="cancel-btn">
-                        Cancel
-                    </button>
-
-                    <button type="submit" class="save-btn">
-                        Save Changes
-                    </button>
-                </div>
-
-            </form>
-
-        </section>
-
-
-        <!-- Security -->
-        <section class="profile-card">
-
-            <div class="section-heading">
-                <div>
-                    <h2>Password & Security</h2>
-                    <p>Keep your account secure</p>
-                </div>
-            </div>
-
-            <div class="security-row">
-
-                <div class="security-info">
-                    <div class="security-icon">
-                        🔒
-                    </div>
-
-                    <div>
-                        <h3>Password</h3>
-                        <p>Last changed recently</p>
-                    </div>
-                </div>
-
-                <button class="change-password-btn">
-                    Change Password
+                <button
+                    type="button"
+                    class="edit-button"
+                    id="openModalButton"
+                >
+                    Edit Profile
                 </button>
 
             </div>
 
-        </section>
+        </div>
+
+    </div>
 
 
-        <!-- Account Details -->
-        <section class="profile-card account-details">
+    <!-- =====================================================
+         INFORMATION CARDS
+    ====================================================== -->
 
-            <div class="section-heading">
-                <div>
-                    <h2>Account Details</h2>
-                    <p>Information related to your account</p>
-                </div>
+    <div class="information-grid">
+
+        <div class="information-card">
+
+            <div class="card-title">
+                Personal Information
             </div>
 
-            <div class="account-list">
+            <div class="info-row">
 
-                <div class="account-item">
-                    <span>Account ID</span>
-                    <strong>#USR-001</strong>
-                </div>
+                <span>Name</span>
 
-                <div class="account-item">
-                    <span>Account Type</span>
-                    <strong>Seller Account</strong>
-                </div>
-
-                <div class="account-item">
-                    <span>Status</span>
-                    <strong class="active-text">Active</strong>
-                </div>
+                <strong>
+                    <?php echo htmlspecialchars($name); ?>
+                </strong>
 
             </div>
 
-        </section>
+            <div class="info-row">
 
-    </main>
+                <span>Username</span>
+
+                <strong>
+                    <?php echo htmlspecialchars($username); ?>
+                </strong>
+
+            </div>
+
+            <div class="info-row">
+
+                <span>Phone</span>
+
+                <strong>
+                    <?php
+                    echo $phone !== ""
+                        ? htmlspecialchars($phone)
+                        : "Not added";
+                    ?>
+                </strong>
+
+            </div>
+
+            <div class="info-row">
+
+                <span>Email</span>
+
+                <strong>
+                    <?php
+                    echo $email !== ""
+                        ? htmlspecialchars($email)
+                        : "Not added";
+                    ?>
+                </strong>
+
+            </div>
+
+        </div>
 
 
-    <!-- Footer -->
-    <footer class="profile-footer">
-        <p>© 2026 Grocery Management System. All rights reserved.</p>
-    </footer>
+        <div class="information-card">
+
+            <div class="card-title">
+                Account Information
+            </div>
+
+            <div class="info-row">
+
+                <span>Role</span>
+
+                <strong>
+                    <?php echo htmlspecialchars(ucfirst($role)); ?>
+                </strong>
+
+            </div>
+
+            <div class="info-row">
+
+                <span>Status</span>
+
+                <strong class="status-text">
+                    <?php echo htmlspecialchars(ucfirst($status)); ?>
+                </strong>
+
+            </div>
+
+            <div class="info-row">
+
+                <span>Member Since</span>
+
+                <strong>
+                    <?php
+                    echo !empty($created_at)
+                        ? date("d M Y", strtotime($created_at))
+                        : "-";
+                    ?>
+                </strong>
+
+            </div>
+
+        </div>
+
+    </div>
 
 </div>
 
-<!-- Edit Profile Modal -->
 
-<div class="modal-overlay" id="editProfileModal">
+<!-- =========================================================
+     EDIT PROFILE MODAL
+========================================================== -->
 
-    <div class="profile-modal">
+<div
+    class="modal-overlay"
+    id="editModal"
+>
+
+    <div class="edit-modal">
 
         <div class="modal-header">
+
             <div>
+
                 <h2>Edit Profile</h2>
-                <p>Update your profile information</p>
+
+                <p>
+                    Update your profile information.
+                </p>
+
             </div>
 
             <button
                 type="button"
-                class="close-modal"
-                onclick="closeEditModal()">
-                ×
+                class="close-button"
+                id="closeModalButton"
+            >
+                &times;
             </button>
+
         </div>
 
 
-        <form>
+        <!-- ONE AND ONLY PROFILE FORM -->
 
-            <!-- Profile Photo -->
+        <form
+            method="POST"
+            action=""
+            enctype="multipart/form-data"
+            id="profileForm"
+        >
 
-            <div class="modal-photo">
+            <!-- =================================================
+                 PHOTO
+            ================================================== -->
 
-                <div class="modal-avatar">
-                    <?php echo strtoupper($name[0] . $name[1]); ?>
+            <div class="modal-photo-section">
+
+                <div class="modal-photo-wrapper">
+
+                    <?php if ($photo_url !== ""): ?>
+
+                        <img
+                            src="<?php echo htmlspecialchars($photo_url); ?>"
+                            class="modal-photo"
+                            id="modalProfilePhoto"
+                            alt="Profile Photo"
+                        >
+
+                    <?php else: ?>
+
+                        <div
+                            class="modal-initials"
+                            id="modalProfileInitials"
+                        >
+                            <?php echo htmlspecialchars($initials); ?>
+                        </div>
+
+                    <?php endif; ?>
+
+
+                    <button
+                        type="button"
+                        class="modal-camera-button"
+                        id="modalCameraButton"
+                    >
+                        📷
+                    </button>
+
                 </div>
 
-                <label for="modal-profile-photo" class="modal-camera">
-                    📷
+                <p>Click camera to change photo</p>
+
+            </div>
+
+
+            <!-- Hidden File Input -->
+
+            <input
+                type="file"
+                id="profilePhotoInput"
+                name="profile_photo"
+                accept="image/jpeg,image/png,image/webp"
+                hidden
+            >
+
+
+            <!-- =================================================
+                 FORM FIELDS
+            ================================================== -->
+
+            <div class="form-grid">
+
+                <div class="form-group">
+
+                    <label for="name">
+                        Full Name
+                    </label>
+
                     <input
-                        type="file"
-                        id="modal-profile-photo"
-                        accept="image/*"
-                        hidden
+                        type="text"
+                        id="name"
+                        name="name"
+                        value="<?php echo htmlspecialchars($name); ?>"
+                        required
                     >
-                </label>
 
-                <p>Change Profile Photo</p>
+                    <small class="field-error" id="nameError"></small>
+
+                </div>
+
+
+                <div class="form-group">
+
+                    <label for="username">
+                        Username
+                    </label>
+
+                    <input
+                        type="text"
+                        id="username"
+                        name="username"
+                        value="<?php echo htmlspecialchars($username); ?>"
+                        required
+                    >
+
+                    <small
+                        class="field-error"
+                        id="usernameError"
+                    ></small>
+
+                </div>
+
+
+                <div class="form-group">
+
+                    <label for="phone">
+                        Phone
+                    </label>
+
+                    <input
+                        type="text"
+                        id="phone"
+                        name="phone"
+                        value="<?php echo htmlspecialchars($phone); ?>"
+                        placeholder="03XXXXXXXXX"
+                    >
+
+                </div>
+
+
+                <div class="form-group">
+
+                    <label for="email">
+                        Email
+                    </label>
+
+                    <input
+                        type="email"
+                        id="email"
+                        name="email"
+                        value="<?php echo htmlspecialchars($email); ?>"
+                        placeholder="example@gmail.com"
+                    >
+
+                    <small
+                        class="field-error"
+                        id="emailError"
+                    ></small>
+
+                </div>
 
             </div>
 
 
-            <!-- Name -->
+            <!-- =================================================
+                 BUTTONS
+            ================================================== -->
 
-            <div class="form-group">
-                <label for="edit-name">Full Name</label>
-
-                <input
-                    type="text"
-                    id="edit-name"
-                    value="<?php echo htmlspecialchars($name); ?>"
-                    placeholder="Enter your full name"
-                >
-            </div>
-
-
-            <!-- Username -->
-
-            <div class="form-group">
-                <label for="edit-username">Username</label>
-
-                <input
-                    type="text"
-                    id="edit-username"
-                    value="<?php echo htmlspecialchars($username); ?>"
-                    placeholder="Enter username"
-                >
-            </div>
-
-
-            <!-- Buttons -->
-
-            <div class="modal-actions">
+            <div class="modal-footer">
 
                 <button
                     type="button"
-                    class="cancel-btn"
-                    onclick="closeEditModal()">
+                    class="cancel-button"
+                    id="cancelButton"
+                >
                     Cancel
                 </button>
 
                 <button
                     type="submit"
-                    class="save-btn">
+                    name="update_profile"
+                    class="save-button"
+                >
                     Save Changes
                 </button>
 
@@ -397,17 +856,9 @@ $shop_id = $_SESSION["shop_id"];
 
 </div>
 
-<script>
 
-function openEditModal() {
-    document.getElementById("editProfileModal").classList.add("active");
-}
-
-function closeEditModal() {
-    document.getElementById("editProfileModal").classList.remove("active");
-}
-
-</script>
+<script src="assets/js/profile.js"></script>
 
 </body>
+
 </html>
